@@ -21,15 +21,19 @@ async fn main() -> anyhow::Result<()> {
     // 构建速率限制器（全局与每客户端），注入到扩展
     let rate_limits = rate_limit::init_rate_limits(&settings);
 
+    // 加载路由前缀规则，并注入扩展
+    let route_rules = config::load_route_rules().unwrap_or_default();
+
     // 路由
     let app = Router::new()
         .route("/", get(|| async { "Rust Gateway is running 🚀" }))
         .route("/metrics", get(metrics::metrics_handler))
         .route("/auth/token", get(auth::issue_temp_token))
-        .nest("/proxy", proxy::router())
+        .merge(proxy::router())
         .layer(axum::middleware::from_fn(metrics::prometheus_middleware))
         .layer(Extension(settings.clone()))
-        .layer(Extension(rate_limits.clone()));
+        .layer(Extension(rate_limits.clone()))
+        .layer(Extension(route_rules));
 
     // 启动服务（带客户端地址信息）
     let listener = TcpListener::bind(&settings.gateway_bind).await?;

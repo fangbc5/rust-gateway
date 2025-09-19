@@ -1,0 +1,7 @@
+[[routes]]
+prefix = "/user"
+upstream = "http://localhost:30000"
+
+[[routes]]
+prefix = "/auth"
+upstream = "http://localhost:30001"

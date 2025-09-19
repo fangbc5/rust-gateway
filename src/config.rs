@@ -2,6 +2,12 @@ use serde::Deserialize;
 use std::time::Duration;
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct RouteRule {
+    pub prefix: String,
+    pub upstream: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct Settings {
     pub gateway_bind: String,
     pub jwt_decoding_key: String,
@@ -25,4 +31,16 @@ pub fn load_settings() -> Result<Settings, config::ConfigError> {
     dotenvy::dotenv().ok();
     let c = c.build()?;
     c.try_deserialize::<Settings>()
+}
+
+#[derive(Debug, Deserialize)]
+struct RoutesFile { routes: Vec<RouteRule> }
+
+pub fn load_route_rules() -> Result<Vec<RouteRule>, config::ConfigError> {
+    // 固定使用 TOML 文件格式，文件名 routes.toml
+    let c = config::Config::builder()
+        .add_source(config::File::new("routes", config::FileFormat::Toml))
+        .build()?;
+    let rf: RoutesFile = c.try_deserialize()?;
+    Ok(rf.routes)
 }

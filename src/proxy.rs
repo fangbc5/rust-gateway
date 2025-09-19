@@ -30,13 +30,41 @@ async fn proxy_handler(req: Request) -> Response<Body> {
         .get::<Settings>()
         .cloned();
 
-    let upstream = settings
-        .as_ref()
-        .map(|s| s.upstream_default.as_str())
-        .unwrap_or("http://httpbin.org");
+    // 从扩展获取路由前缀规则
+    let route_rules = req
+        .extensions()
+        .get::<Vec<crate::config::RouteRule>>()
+        .cloned();
+
+    // 用于匹配与转发的路径（去除 /proxy 前缀）
+    let full_path = req.uri().path();
+    let match_path = full_path.strip_prefix("/proxy").unwrap_or(full_path);
+    let query_suffix = req.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
+
+    let (upstream, forward_path) = if let Some(s) = &settings {
+        if let Some(rules) = route_rules.as_ref() {
+            // 最长前缀匹配（基于去除 /proxy 的路径，与 routes.toml 中的前缀风格一致，如 /user、/auth）
+            if let Some(best) = rules
+                .iter()
+                .filter(|r| match_path.starts_with(&r.prefix))
+                .max_by_key(|r| r.prefix.len())
+            {
+                let suffix = match_path.strip_prefix(&best.prefix).unwrap_or(match_path);
+                let suffix = if suffix.starts_with('/') { suffix.to_string() } else { format!("/{}", suffix) };
+                (best.upstream.clone(), suffix)
+            } else {
+                // 未命中前缀时回退到默认上游，转发去除 /proxy 的路径
+                (s.upstream_default.clone(), match_path.to_string())
+            }
+        } else {
+            (s.upstream_default.clone(), match_path.to_string())
+        }
+    } else {
+        ("http://httpbin.org".to_string(), match_path.to_string())
+    };
 
     let client = Client::new();
-    let uri = format!("{}{}", upstream, req.uri());
+    let uri = format!("{}{}{}", upstream, forward_path, query_suffix);
 
     info!("Proxying request -> {}", uri);
 
