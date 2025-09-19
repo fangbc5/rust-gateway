@@ -8,6 +8,7 @@ mod auth;
 mod config;
 mod metrics;
 mod rate_limit;
+mod path_matcher;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -1,7 +1,9 @@
+# 传统前缀匹配
 [[routes]]
 prefix = "/user"
 upstream = "http://localhost:30000"
 
+# 路径变量匹配
 [[routes]]
-prefix = "/auth"
+prefix = "/api/user/{id}"
 upstream = "http://localhost:30001"

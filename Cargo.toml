@@ -39,3 +39,6 @@ config = "0.15.16"
 
 # prometheus
 prometheus = "0.14.0"
+
+# 路径匹配
+regex = "1.10"
