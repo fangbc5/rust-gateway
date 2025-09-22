@@ -13,13 +13,14 @@ mod load_balancer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 初始化日志：若无 RUST_LOG 则默认 info
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+        )
+        .init();
     // 加载环境配置
     let settings = config::load_settings()?;
-    // 初始化日志
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
     // 构建速率限制器（全局与每客户端），注入到扩展
     let rate_limits = rate_limit::init_rate_limits(&settings);
 

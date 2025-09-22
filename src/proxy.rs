@@ -7,7 +7,7 @@ use axum::{
 };
 use reqwest::Client;
 use tracing::info;
-use crate::config::Settings;
+use crate::{auth::JwtAuth, config::Settings};
 use crate::rate_limit::rate_limit_layer;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,32 +48,38 @@ pub fn router() -> Router {
 async fn proxy_handler(req: Request<Body>) -> Response<Body> {
     let settings = req.extensions().get::<Settings>().cloned();
     let route_rules = req.extensions().get::<Vec<crate::config::RouteRule>>().cloned();
+    let jwt_auth = req.extensions().get::<JwtAuth>();
 
     // 去掉 /proxy 前缀
     let full_path = req.uri().path();
     let match_path = full_path.strip_prefix("/proxy").unwrap_or(full_path);
     let query_suffix = req.uri().query().map(|q| format!("?{}", q)).unwrap_or_default();
 
-    let (upstream, forward_path) = if let Some(s) = &settings {
-        if let Some(rules) = &route_rules {
-            if let Some(best_match) = find_best_match(rules, match_path) {
-                let path_variables = best_match.extract_variables(match_path);
-
-                // 使用全局无锁负载均衡器
-                let selected_upstream = get_or_create_balancer(&best_match.upstream, &best_match.strategy)
-                    .select(None)
-                    .unwrap_or_else(|| best_match.upstream[0].clone());
-
-                let forward_path = reconstruct_forward_path(match_path, &best_match.prefix, &path_variables);
-                (selected_upstream, forward_path)
-            } else {
-                (s.upstream_default.clone(), match_path.to_string())
-            }
+    // 选择上游
+    let selected: Option<(String, String)> = if let Some(rules) = &route_rules {
+        if let Some(best_match) = find_best_match(rules, match_path) {
+            let path_variables = best_match.extract_variables(match_path);
+            let selected_upstream = get_or_create_balancer(&best_match.upstream, &best_match.strategy)
+                .select(None)
+                .unwrap_or_else(|| best_match.upstream[0].clone());
+            let forward_path = reconstruct_forward_path(match_path, &best_match.prefix, &path_variables);
+            Some((selected_upstream, forward_path))
         } else {
-            (s.upstream_default.clone(), match_path.to_string())
+            None
         }
     } else {
-        ("http://httpbin.org".to_string(), match_path.to_string())
+        None
+    };
+
+    let (upstream, forward_path) = match selected {
+        Some(v) => v,
+        None => {
+            return Response::builder()
+                .status(502)
+                .header(axum::http::header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .body(Body::from(format!("{{\"error\":\"No upstream configured for path: {}\"}}", match_path)))
+                .unwrap();
+        }
     };
 
     info!("路径匹配: {} -> {} (转发到: {})", match_path, forward_path, upstream);
@@ -92,6 +98,8 @@ async fn proxy_handler(req: Request<Body>) -> Response<Body> {
         if name == &axum::http::header::HOST { continue; }
         rb = rb.header(name, value);
     }
+    rb = rb.header("uid", jwt_auth.unwrap().0.sub.clone());
+    rb = rb.header("tenant_id", jwt_auth.unwrap().0.tenant_id.clone());
 
     // 读取请求体并转换为reqwest::Body
     let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
@@ -99,7 +107,8 @@ async fn proxy_handler(req: Request<Body>) -> Response<Body> {
         Err(err) => {
             return Response::builder()
                 .status(500)
-                .body(Body::from(format!("Body read error: {}", err)))
+                .header(axum::http::header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .body(Body::from(format!("{{\"error\":\"Body read error: {}\"}}", err)))
                 .unwrap();
         }
     };
@@ -133,7 +142,8 @@ async fn proxy_handler(req: Request<Body>) -> Response<Body> {
                 Err(err) => {
                     return Response::builder()
                         .status(500)
-                        .body(Body::from(format!("Response body error: {}", err)))
+                        .header(axum::http::header::CONTENT_TYPE, "application/json; charset=utf-8")
+                        .body(Body::from(format!("{{\"error\":\"Response body error: {}\"}}", err)))
                         .unwrap();
                 }
             };
@@ -142,7 +152,8 @@ async fn proxy_handler(req: Request<Body>) -> Response<Body> {
         }
         Err(err) => Response::builder()
             .status(500)
-            .body(Body::from(format!("Proxy error: {}", err)))
+            .header(axum::http::header::CONTENT_TYPE, "application/json; charset=utf-8")
+            .body(Body::from(format!("{{\"error\":\"Proxy error: {}\"}}", err)))
             .unwrap(),
     }
 }

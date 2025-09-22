@@ -7,7 +7,7 @@ upstream = ["http://localhost:30000", "http://localhost:30001", "http://localhos
 [[routes]]
 prefix = "/api/user/{id}"
 upstream = ["http://localhost:30000", "http://localhost:30001", "http://localhost:30002"]
-strategy = "iphash"
+strategy = "random"
 
 # 多前缀匹配，多上游轮询
 #[[routes]]

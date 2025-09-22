@@ -1,5 +1,6 @@
+use config::{Config, ConfigError, File};
 use serde::Deserialize;
-use std::time::Duration;
+use std::{env, path::PathBuf, time::Duration};
 use crate::path_matcher::RoutePattern;
 use std::collections::HashMap;
 
@@ -68,7 +69,6 @@ mod upstream_deserializer {
 pub struct Settings {
     pub gateway_bind: String,
     pub jwt_decoding_key: String,
-    pub upstream_default: String,
     pub global_qps: u32,
     pub client_qps: u32,
     pub request_timeout_secs: Option<u64>,
@@ -162,22 +162,34 @@ pub fn load_settings() -> Result<Settings, config::ConfigError> {
 #[derive(Debug, Deserialize)]
 struct RoutesFile { routes: Vec<RouteRule> }
 
-pub fn load_route_rules() -> Result<Vec<RouteRule>, config::ConfigError> {
-    // 固定使用 TOML 文件格式，文件名 routes.toml
-    let c = config::Config::builder()
-        .add_source(config::File::new("routes", config::FileFormat::Toml))
+pub fn load_route_rules() -> Result<Vec<RouteRule>, ConfigError> {
+    // 可执行文件同级目录
+    let exe_dir: PathBuf = env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // 打包后同目录下的 routes.toml
+    let packaged_routes = exe_dir.join("routes.toml");
+
+    // 构建配置，优先读取项目根目录的 routes.toml，其次读取打包目录
+    let c = Config::builder()
+        .add_source(File::with_name("routes").required(false)) // 开发时：./routes.toml
+        .add_source(File::from(packaged_routes).required(false)) // 部署时：bin 同目录
         .build()?;
+
+    // 反序列化到结构体
     let rf: RoutesFile = c.try_deserialize()?;
-    
+
     // 校验所有路由规则
     for (i, rule) in rf.routes.iter().enumerate() {
         if let Err(err) = rule.validate() {
-            return Err(config::ConfigError::Message(format!(
+            return Err(ConfigError::Message(format!(
                 "路由规则 #{} 配置错误: {}", i + 1, err
             )));
         }
     }
-    
+
     Ok(rf.routes)
 }
 
@@ -206,7 +218,7 @@ mod tests {
             ("/api/user/123", true, "30001或30002"),
         ];
 
-        for (path, should_match, expected_upstream) in test_cases {
+        for (path, _should_match, expected_upstream) in test_cases {
             let mut matched = false;
             for route in &routes {
                 if route.matches(path) {
