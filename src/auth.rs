@@ -83,20 +83,3 @@ where
         Ok(JwtAuth(token_data.claims))
     }
 }
-
-pub async fn issue_temp_token(settings: axum::Extension<Settings>) -> impl IntoResponse {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::from_secs(0)).as_secs() as usize;
-    let exp = now + 60 * 60; // 1 hour
-    let claims = Claims {
-        sub: "admin".to_string(),
-        tenant_id: "0".to_string(),
-        exp,
-    };
-    let header = Header::new(Algorithm::HS256);
-    let token = encode(&header, &claims, &EncodingKey::from_secret(settings.jwt_decoding_key.as_bytes()));
-
-    match token {
-        Ok(t) => (StatusCode::OK, axum::Json(json!({ "token": t }))).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Token sign error").into_response(),
-    }
-}

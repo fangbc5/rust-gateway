@@ -98,8 +98,8 @@ async fn proxy_handler(req: Request<Body>) -> Response<Body> {
         if name == &axum::http::header::HOST { continue; }
         rb = rb.header(name, value);
     }
-    rb = rb.header("uid", jwt_auth.unwrap().0.sub.clone());
-    rb = rb.header("tenant_id", jwt_auth.unwrap().0.tenant_id.clone());
+    // rb = rb.header("uid", jwt_auth.unwrap().0.sub.clone());
+    // rb = rb.header("tenant_id", jwt_auth.unwrap().0.tenant_id.clone());
 
     // 读取请求体并转换为reqwest::Body
     let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {

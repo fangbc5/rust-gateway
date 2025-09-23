@@ -31,7 +31,6 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(|| async { "Rust Gateway is running 🚀" }))
         .route("/metrics", get(metrics::metrics_handler))
-        .route("/auth/token", get(auth::issue_temp_token))
         .merge(proxy::router())
         .layer(axum::middleware::from_fn(metrics::prometheus_middleware))
         .layer(Extension(settings.clone()))
