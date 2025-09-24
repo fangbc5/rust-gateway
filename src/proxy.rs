@@ -7,13 +7,15 @@ use axum::{
 };
 use reqwest::Client;
 use tracing::info;
-use crate::{auth::JwtAuth, config::Settings};
+use crate::config::Settings;
 use crate::rate_limit::rate_limit_layer;
 use std::sync::Arc;
 use std::time::Duration;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use crate::load_balancer::{RoundRobinBalancer, WeightedRandomBalancer, IpHashBalancer, LoadBalancer, WeightedUpstream};
+use axum::middleware::Next;
+use axum::http::HeaderValue;
 
 // ===== 全局客户端 =====
 /// 全局 HTTP 客户端（高并发优化）
@@ -40,6 +42,7 @@ pub fn router() -> Router {
 
     Router::new()
         .route("/*path", any(proxy_handler))
+        .route_layer(middleware::from_fn(propagate_auth_headers)) // 新增
         .route_layer(middleware::from_extractor::<JwtAuth>())
         .layer(axum::middleware::from_fn(rate_limit_layer))
 }
@@ -48,7 +51,6 @@ pub fn router() -> Router {
 async fn proxy_handler(req: Request<Body>) -> Response<Body> {
     let settings = req.extensions().get::<Settings>().cloned();
     let route_rules = req.extensions().get::<Vec<crate::config::RouteRule>>().cloned();
-    let jwt_auth = req.extensions().get::<JwtAuth>();
 
     // 去掉 /proxy 前缀
     let full_path = req.uri().path();
@@ -98,8 +100,14 @@ async fn proxy_handler(req: Request<Body>) -> Response<Body> {
         if name == &axum::http::header::HOST { continue; }
         rb = rb.header(name, value);
     }
-    // rb = rb.header("uid", jwt_auth.unwrap().0.sub.clone());
-    // rb = rb.header("tenant_id", jwt_auth.unwrap().0.tenant_id.clone());
+
+    // 透传认证信息：uid 与 tenant_id
+    if let Some(jwt) = req.extensions().get::<crate::auth::JwtAuth>() {
+        // 假定 JwtAuth(pub Claims) 且 Claims { sub, tenant_id, ... }
+        rb = rb
+            .header("uid", jwt.0.sub.clone())
+            .header("tenant_id", jwt.0.tenant_id.clone());
+    }
 
     // 读取请求体并转换为reqwest::Body
     let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
@@ -213,4 +221,27 @@ fn reconstruct_forward_path(
         }
     }
     original_path.to_string()
+}
+
+async fn propagate_auth_headers(mut req: Request<Body>, next: Next) -> Response<Body> {
+    // 先提取 JWT 信息，避免借用冲突
+    let (uid, tenant_id) = if let Some(jwt) = req.extensions().get::<crate::auth::JwtAuth>() {
+        (jwt.0.sub.clone(), jwt.0.tenant_id.clone())
+    } else {
+        (String::new(), String::new())
+    };
+    
+    // 然后修改 headers
+    if !uid.is_empty() {
+        if let Ok(v) = HeaderValue::from_str(&uid) {
+            req.headers_mut().insert("uid", v);
+        }
+    }
+    if !tenant_id.is_empty() {
+        if let Ok(v) = HeaderValue::from_str(&tenant_id) {
+            req.headers_mut().insert("tenant_id", v);
+        }
+    }
+    
+    next.run(req).await
 }

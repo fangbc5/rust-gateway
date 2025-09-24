@@ -4,12 +4,10 @@ use axum::{
     http::{request::Parts, StatusCode},
     response::{IntoResponse},
 };
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Validation, TokenData, Header};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation, TokenData};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use crate::config::Settings;
 use thiserror::Error;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
@@ -43,6 +41,7 @@ impl IntoResponse for AuthError {
 }
 
 /// Extractor: 从请求 header 中验证 JWT 并把 Claims 放进请求扩展里
+#[derive(Debug, Clone)]
 pub struct JwtAuth(pub Claims);
 
 #[async_trait]
@@ -80,6 +79,11 @@ where
             &validation,
         )?;
 
-        Ok(JwtAuth(token_data.claims))
+        let claims = token_data.claims;
+        
+        // // 将解析后的 Claims 存储到 extensions 中，供后续中间件使用
+        parts.extensions.insert(JwtAuth(claims.clone()));
+
+        Ok(JwtAuth(claims))
     }
 }
