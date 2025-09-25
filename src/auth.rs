@@ -52,6 +52,11 @@ where
     type Rejection = AuthError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // 白名单标记则跳过鉴权，返回空 Claims
+        if parts.extensions.get::<crate::proxy::WhitelistBypass>().is_some() {
+            return Ok(JwtAuth(Claims { sub: String::new(), exp: 0, tenant_id: String::new() }));
+        }
+
         // we expect Settings stored in extensions for global access
         let settings = parts
             .extensions

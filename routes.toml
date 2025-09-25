@@ -1,4 +1,5 @@
 # 多前缀匹配，多上游轮询
 [[routes]]
-prefix = "/auth/**"
+prefix = ["/auth/**", "/token/**", "/user/**"]
 upstream = "http://localhost:30000"
+whitelist = ["/auth/login","/auth/code/send","/auth/code/verify","/auth/register"]

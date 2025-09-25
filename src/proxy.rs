@@ -36,14 +36,20 @@ pub static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
 // ===== 全局负载均衡器存储 =====
 static BALANCERS: Lazy<DashMap<String, Arc<dyn LoadBalancer + Send + Sync>>> = Lazy::new(DashMap::new);
 
+// 标记：当前请求已命中白名单
+#[derive(Clone, Copy, Debug)]
+pub struct WhitelistBypass;
+
 // ===== 代理服务路由 =====
 pub fn router() -> Router {
     use crate::auth::JwtAuth;
 
     Router::new()
         .route("/*path", any(proxy_handler))
-        .route_layer(middleware::from_fn(propagate_auth_headers)) // 新增
+        // 执行顺序（自下而上）：check_whitelist -> JwtAuth -> propagate_auth_headers
+        .route_layer(middleware::from_fn(propagate_auth_headers))
         .route_layer(middleware::from_extractor::<JwtAuth>())
+        .route_layer(middleware::from_fn(check_whitelist_middleware))
         .layer(axum::middleware::from_fn(rate_limit_layer))
 }
 
@@ -99,14 +105,6 @@ async fn proxy_handler(req: Request<Body>) -> Response<Body> {
     for (name, value) in req.headers().iter() {
         if name == &axum::http::header::HOST { continue; }
         rb = rb.header(name, value);
-    }
-
-    // 透传认证信息：uid 与 tenant_id
-    if let Some(jwt) = req.extensions().get::<crate::auth::JwtAuth>() {
-        // 假定 JwtAuth(pub Claims) 且 Claims { sub, tenant_id, ... }
-        rb = rb
-            .header("uid", jwt.0.sub.clone())
-            .header("tenant_id", jwt.0.tenant_id.clone());
     }
 
     // 读取请求体并转换为reqwest::Body
@@ -223,6 +221,39 @@ fn reconstruct_forward_path(
     original_path.to_string()
 }
 
+// ===== 白名单检查中间件 =====
+async fn check_whitelist_middleware(mut req: Request<Body>, next: Next) -> Response<Body> {
+    let path = req.uri().path();
+    let match_path = path.strip_prefix("/proxy").unwrap_or(path);
+
+    if let Some(rules) = req.extensions().get::<Vec<crate::config::RouteRule>>() {
+        // 找到第一个匹配的路由，检查其 whitelist 是否命中
+        if let Some(rule) = find_best_match(rules, match_path) {
+            if let Some(whitelist) = &rule.whitelist {
+                // 任意一个白名单模式命中即可
+                let hit = whitelist.iter().any(|w| {
+                    // 复用 RouteRule 的匹配逻辑
+                    // 这里把单个白名单项当作一个前缀来匹配
+                    if w.contains('{') || w.contains('*') || w.contains('?') {
+                        crate::path_matcher::RoutePattern::from_pattern(w)
+                            .map(|rp| rp.matches(match_path))
+                            .unwrap_or(false)
+                    } else {
+                        match_path == w || match_path.starts_with(&format!("{}/", w))
+                    }
+                });
+                if hit {
+                    // 标记跳过鉴权
+                    req.extensions_mut().insert(WhitelistBypass);
+                }
+            }
+        }
+    }
+
+    next.run(req).await
+}
+
+// ===== 透传租户和用户id信息中间件 =====
 async fn propagate_auth_headers(mut req: Request<Body>, next: Next) -> Response<Body> {
     // 先提取 JWT 信息，避免借用冲突
     let (uid, tenant_id) = if let Some(jwt) = req.extensions().get::<crate::auth::JwtAuth>() {

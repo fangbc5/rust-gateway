@@ -15,6 +15,9 @@ pub struct RouteRule {
     // 负载均衡策略，默认为轮询
     #[serde(default = "default_strategy")]
     pub strategy: String,
+    // 白名单路径（命中则跳过鉴权），支持 string 或 array
+    #[serde(default, deserialize_with = "opt_vec_string_deser::deserialize")] 
+    pub whitelist: Option<Vec<String>>,
 }
 
 // 默认负载均衡策略
@@ -62,6 +65,30 @@ mod upstream_deserializer {
             StringOrVec::String(s) => Ok(vec![s]),
             StringOrVec::Vec(v) => Ok(v),
         }
+    }
+}
+
+// 反序列化 Option<Vec<String>>，既支持缺省(None)，也支持 string 或 array
+mod opt_vec_string_deser {
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OptStringOrVec {
+            None,
+            String(String),
+            Vec(Vec<String>),
+        }
+        let v = Option::<OptStringOrVec>::deserialize(deserializer)?;
+        Ok(match v {
+            Some(OptStringOrVec::String(s)) => Some(vec![s]),
+            Some(OptStringOrVec::Vec(v)) => Some(v),
+            _ => None,
+        })
     }
 }
 
@@ -150,13 +177,15 @@ impl RouteRule {
 }
 
 pub fn load_settings() -> Result<Settings, config::ConfigError> {
-    let c = config::Config::builder()
-        .add_source(config::File::with_name("config").required(false))
-        .add_source(config::Environment::default());
-    // also load .env
+    // 先加载环境变量
     dotenvy::dotenv().ok();
-    let c = c.build()?;
-    c.try_deserialize::<Settings>()
+
+    let builder = Config::builder()
+        .add_source(File::with_name("config").required(false))
+        .add_source(config::Environment::default());
+
+    let cfg = builder.build()?;
+    cfg.try_deserialize::<Settings>()
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,15 +229,17 @@ mod tests {
     #[test]
     fn test_route_rule_matching() {
         let routes = vec![
-            RouteRule { 
-                prefix: vec!["/user".to_string(), "/users".to_string()], 
+            RouteRule {
+                prefix: vec!["/user".to_string(), "/users".to_string()],
                 upstream: vec!["http://localhost:30000".to_string()],
                 strategy: "robin".to_string(),
+                whitelist: None,
             },
-            RouteRule { 
-                prefix: vec!["/api/user/{id}".to_string()], 
+            RouteRule {
+                prefix: vec!["/api/user/{id}".to_string()],
                 upstream: vec!["http://localhost:30001".to_string(), "http://localhost:30002".to_string()],
                 strategy: "random".to_string(),
+                whitelist: None,
             },
         ];
 
@@ -239,6 +270,7 @@ mod tests {
             prefix: vec!["/user".to_string()],
             upstream: vec!["http://localhost:30000".to_string()],
             strategy: "robin".to_string(),
+            whitelist: None,
         };
         assert!(valid_route.validate().is_ok());
 
@@ -246,6 +278,7 @@ mod tests {
             prefix: vec![],
             upstream: vec!["http://localhost:30000".to_string()],
             strategy: "robin".to_string(),
+            whitelist: None,
         };
         assert!(invalid_prefix.validate().is_err());
 
@@ -253,6 +286,7 @@ mod tests {
             prefix: vec!["/user".to_string()],
             upstream: vec![],
             strategy: "robin".to_string(),
+            whitelist: None,
         };
         assert!(invalid_upstream.validate().is_err());
 
@@ -260,6 +294,7 @@ mod tests {
             prefix: vec!["/user".to_string()],
             upstream: vec!["http://localhost:30000".to_string()],
             strategy: "unknown".to_string(),
+            whitelist: None,
         };
         assert!(invalid_strategy.validate().is_err());
     }
