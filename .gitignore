@@ -1,1 +1,44 @@
+# Rust
 /target
+Cargo.lock
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Runtime
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+lcov.info
+*.gcov
+*.gcno
+*.gcda
+
+# Temporary files
+*.tmp
+*.temp
